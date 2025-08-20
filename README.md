@@ -105,6 +105,209 @@ async def main():
 asyncio.run(main())
 ```
 
+### AWS SQS Usage
+
+#### Synchronous Mode
+```python
+from cloud_utils.providers.aws import SQSClient, SQSHandler
+
+# Method 1: Using SQSClient directly
+sqs = SQSClient(region_name='us-east-1')
+
+# Create queue
+queue_url = sqs.create_queue('my-queue')
+
+# Send message
+message_id = sqs.send_message(queue_url, 'Hello, World!')
+
+# Send batch messages
+messages = [
+    {'Id': '1', 'MessageBody': 'First message'},
+    {'Id': '2', 'MessageBody': 'Second message'}
+]
+results = sqs.send_message_batch(queue_url, messages)
+
+# Receive messages
+messages = sqs.receive_messages(queue_url, max_number_of_messages=10)
+
+# Process and delete messages
+for message in messages:
+    print(f"Received: {message['Body']}")
+    sqs.delete_message(queue_url, message['ReceiptHandle'])
+
+# Method 2: Using SQSHandler for specific queue
+sqs_handler = SQSHandler(queue_name='my-queue', region_name='us-east-1')
+
+# Send message (no need to specify queue URL)
+message_id = sqs_handler.send_message('Hello from handler!')
+
+# Receive messages
+messages = sqs_handler.receive_messages(max_number_of_messages=5)
+
+# Get queue information
+queue_info = sqs_handler.get_queue_info()
+print(f"Queue has {queue_info['attributes']['ApproximateNumberOfMessages']} messages")
+print(f"Is FIFO queue: {queue_info['is_fifo']}")
+
+# Method 3: FIFO Queue with automatic parameter handling
+fifo_handler = SQSHandler(queue_name='my-fifo-queue.fifo', region_name='us-east-1')
+
+# For FIFO queues, group_id and deduplication_id are automatically generated if not provided
+message_id = fifo_handler.send_message('FIFO message')  # Auto-generates required FIFO parameters
+
+# Send batch messages to FIFO queue
+fifo_messages = [
+    {'MessageBody': 'FIFO message 1'},
+    {'MessageBody': 'FIFO message 2'}
+]
+# All required FIFO parameters (Id, MessageDeduplicationId, MessageGroupId) are auto-generated
+results = fifo_handler.send_message_batch(fifo_messages)
+
+# Method 4: Simple message body list for batch sending
+# Just provide a list of message strings - much simpler!
+simple_messages = [
+    'Hello from message 1',
+    'Hello from message 2',
+    'Hello from message 3'
+]
+# Automatically converts to proper message format and handles FIFO requirements
+results = fifo_handler.send_messages(simple_messages)
+
+# With custom attributes for all messages
+custom_attributes = {
+    'MessageType': {'StringValue': 'notification', 'DataType': 'String'},
+    'Priority': {'StringValue': 'high', 'DataType': 'String'}
+}
+results = fifo_handler.send_messages(simple_messages, message_attributes=custom_attributes)
+
+# Method 5: Send dictionary data (automatically converted to JSON)
+user_data = {
+    'user_id': 12345,
+    'name': 'John Doe',
+    'email': 'john@example.com',
+    'preferences': {'theme': 'dark', 'notifications': True}
+}
+
+# Send single dictionary message
+message_id = fifo_handler.send_message(user_data)
+
+# Send multiple dictionary messages
+user_messages = [
+    {'user_id': 1, 'action': 'login', 'timestamp': '2024-01-01T10:00:00Z'},
+    {'user_id': 2, 'action': 'logout', 'timestamp': '2024-01-01T11:00:00Z'},
+    {'user_id': 3, 'action': 'purchase', 'amount': 99.99, 'timestamp': '2024-01-01T12:00:00Z'}
+]
+# All dictionaries are automatically converted to JSON strings
+results = fifo_handler.send_messages(user_messages)
+```
+
+#### Asynchronous Mode
+```python
+import asyncio
+from cloud_utils.providers.aws import AioSQSClient, AioSQSHandler
+
+async def main():
+    # Method 1: Using AioSQSClient directly
+    sqs_async = AioSQSClient(region_name='us-east-1')
+    
+    # Create queue
+    queue_url = await sqs_async.create_queue('my-async-queue')
+    
+    # Send message
+    message_id = await sqs_async.send_message(queue_url, 'Async Hello!')
+    
+    # Long poll receive messages
+    messages = await sqs_async.long_poll_receive(
+        queue_url, 
+        max_poll_time=60  # Poll for up to 1 minute
+    )
+    
+    # Process and delete messages
+    for message in messages:
+        print(f"Received: {message['Body']}")
+        await sqs_async.delete_message(queue_url, message['ReceiptHandle'])
+    
+    # Method 2: Using AioSQSHandler for specific queue
+    sqs_handler = AioSQSHandler(queue_name='my-async-queue', region_name='us-east-1')
+    
+    # Send message (no need to specify queue URL)
+    message_id = await sqs_handler.send_message('Hello from async handler!')
+    
+    # Long poll receive messages
+    messages = await sqs_handler.long_poll_receive(max_poll_time=120)
+    
+    # Get queue information
+    queue_info = await sqs_handler.get_queue_info()
+    print(f"Queue has {queue_info['attributes']['ApproximateNumberOfMessages']} messages")
+    print(f"Is FIFO queue: {queue_info['is_fifo']}")
+    
+    # Method 3: FIFO Queue with automatic parameter handling
+    fifo_handler = AioSQSHandler(queue_name='my-async-fifo-queue.fifo', region_name='us-east-1')
+    
+    # For FIFO queues, group_id and deduplication_id are automatically generated if not provided
+    message_id = await fifo_handler.send_message('Async FIFO message')
+    
+    # Send batch messages to FIFO queue
+    fifo_messages = [
+        {'MessageBody': 'Async FIFO message 1'},
+        {'MessageBody': 'Async FIFO message 2'}
+    ]
+    # All required FIFO parameters are auto-generated
+    results = await fifo_handler.send_message_batch(fifo_messages)
+
+    # Method 4: Simple message body list for batch sending
+    # Just provide a list of message strings - much simpler!
+    simple_messages = [
+        'Async Hello from message 1',
+        'Async Hello from message 2',
+        'Async Hello from message 3'
+    ]
+    # Automatically converts to proper message format and handles FIFO requirements
+    results = await fifo_handler.send_messages(simple_messages)
+
+    # With custom attributes for all messages
+    custom_attributes = {
+        'MessageType': {'StringValue': 'async_notification', 'DataType': 'String'},
+        'Priority': {'StringValue': 'high', 'DataType': 'String'}
+    }
+    results = await fifo_handler.send_messages(simple_messages, message_attributes=custom_attributes)
+
+    # Method 5: Send dictionary data (automatically converted to JSON)
+    async_user_data = {
+        'user_id': 67890,
+        'name': 'Jane Smith',
+        'email': 'jane@example.com',
+        'preferences': {'theme': 'light', 'notifications': False}
+    }
+
+    # Send single dictionary message
+    message_id = await fifo_handler.send_message(async_user_data)
+
+    # Send multiple dictionary messages
+    async_user_messages = [
+        {'user_id': 4, 'action': 'async_login', 'timestamp': '2024-01-01T13:00:00Z'},
+        {'user_id': 5, 'action': 'async_logout', 'timestamp': '2024-01-01T14:00:00Z'},
+        {'user_id': 6, 'action': 'async_purchase', 'amount': 149.99, 'timestamp': '2024-01-01T15:00:00Z'}
+    ]
+    # All dictionaries are automatically converted to JSON strings
+    results = await fifo_handler.send_messages(async_user_messages)
+
+# Execute
+asyncio.run(main())
+```
+
+### FIFO Queue Automatic Handling
+
+The SQSHandler and AioSQSHandler automatically detect FIFO queues (queues ending with `.fifo`) and handle required parameters:
+
+- **Automatic Detection**: Queue type is detected from the queue URL
+- **Message Deduplication ID**: Automatically generated using message content hash + timestamp
+- **Message Group ID**: Automatically generated using timestamp
+- **Delay Seconds**: Automatically disabled for FIFO queues (not supported)
+- **Batch Operations**: All required FIFO parameters are auto-generated for batch messages
+
+This makes working with FIFO queues much simpler while ensuring compliance with AWS SQS FIFO requirements.
+
 ### Common Features Usage
 
 #### Configuration Management
@@ -168,8 +371,10 @@ cloud-utils/
 │   └── providers/            # Cloud service-specific clients
 │       ├── aws/             # AWS services
 │       │   ├── s3_client.py # Synchronous S3
+│       │   ├── sqs_client.py # Synchronous SQS + SQSHandler
 │       │   └── aio/         # Asynchronous clients
-│       │       └── s3_client.py
+│       │       ├── s3_client.py
+│       │       └── sqs_client.py # Async SQS + AioSQSHandler
 │       ├── gcp/             # Google Cloud (future)
 │       └── azure/           # Azure (future)
 ├── packages/                 # Development/design documents
@@ -239,7 +444,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 🗺️ Roadmap
 
 ### v0.2.0 (Future)
-- [ ] Add AWS SQS client
+- [x] Add AWS SQS client
+- [x] Add SQSHandler for specific queue operations
 - [ ] Add AWS DynamoDB client
 - [ ] Add AWS OpenSearch client
 
