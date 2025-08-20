@@ -5,7 +5,10 @@ A comprehensive library for easy access to various cloud services with both
 synchronous and asynchronous support.
 """
 
-__version__ = "0.1.0"
+try:
+    from ._version import version as __version__
+except ImportError:
+    __version__ = "0.1.0"
 __author__ = "Cloud Utils Team"
 __email__ = "team@cloud-utils.com"
 
@@ -33,11 +36,15 @@ from .exceptions import (
     AWSPermissionError,
 )
 
-# Main clients
-from .providers.aws.s3_client import S3Client
-from .providers.aws.sqs_client import SQSClient, SQSHandler
-from .providers.aws.aio.s3_client import AioS3Client
-from .providers.aws.aio.sqs_client import AioSQSClient, AioSQSHandler
+# Main clients - conditionally import based on available dependencies
+try:
+    from .providers.aws.s3_client import S3Client
+    from .providers.aws.sqs_client import SQSClient, SQSHandler
+    from .providers.aws.aio.s3_client import AioS3Client
+    from .providers.aws.aio.sqs_client import AioSQSClient, AioSQSHandler
+    AWS_AVAILABLE = True
+except ImportError:
+    AWS_AVAILABLE = False
 
 __all__ = [
     # Common exceptions
@@ -59,12 +66,15 @@ __all__ = [
     "AWSConnectionError",
     "AWSResourceNotFoundError",
     "AWSPermissionError",
-    
-    # Main clients
-    "S3Client",
-    "SQSClient",
-    "SQSHandler",
-    "AioS3Client",
-    "AioSQSClient",
-    "AioSQSHandler",
 ]
+
+# Conditionally add AWS clients if available
+if AWS_AVAILABLE:
+    __all__.extend([
+        "S3Client",
+        "SQSClient",
+        "SQSHandler",
+        "AioS3Client",
+        "AioSQSClient",
+        "AioSQSHandler",
+    ])

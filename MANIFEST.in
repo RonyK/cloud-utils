@@ -1,0 +1,29 @@
+# Include source files
+include README.md
+include LICENSE
+include pyproject.toml
+include setup.py
+recursive-include src *.py
+recursive-include src *.pyi
+recursive-include src *.typed
+recursive-include tests *.py
+recursive-include examples *.py
+recursive-include docs *.md
+recursive-include docs *.rst
+recursive-include docs *.txt
+
+# Exclude build artifacts and temporary files
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude .DS_Store
+global-exclude .git*
+global-exclude .hg*
+global-exclude .svn*
+global-exclude .tox
+global-exclude .venv
+global-exclude .env
+global-exclude *.egg-info
+global-exclude dist
+global-exclude build
+
