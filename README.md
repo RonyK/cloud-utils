@@ -97,7 +97,94 @@ async def main():
     
     # Upload file
     await s3_async.upload_file('local-file.txt', 'my-async-bucket', 'remote-file.txt')
+```
+
+### AWS CloudWatch Metrics Usage
+
+#### Synchronous Mode
+```python
+from cloud_utils.providers.aws import CloudWatchMetricsClient, MetricDimension, MetricQuery
+import datetime
+
+# Initialize CloudWatch client
+cw = CloudWatchMetricsClient(region_name='ap-northeast-2')
+
+# Define metric dimensions
+dimensions = [
+    MetricDimension("Service", "processor"),
+    MetricDimension("Stage", "prod"),
+    MetricDimension("Environment", "production")
+]
+
+# Create metric queries
+queries = [
+    MetricQuery(
+        namespace="MyApp/Metrics",
+        metric_name="ResourcesProcessed",
+        dimensions=dimensions,
+        period=60,
+        stat="Sum",
+        unit="Count"
+    ),
+    # Metric Math를 사용한 초당 처리율 계산
+    MetricQuery(
+        namespace="MyApp/Metrics",
+        metric_name="ResourcesProcessed",
+        dimensions=dimensions,
+        period=60,
+        stat="Sum",
+        expression="query_0 / PERIOD(query_0)",  # 분당합 / 60초 = 초당
+        label="ResourcesProcessed per second"
+    )
+]
+
+# Set time range
+end_time = datetime.datetime.now(datetime.timezone.utc)
+start_time = end_time - datetime.timedelta(hours=24)
+
+# Get multiple metrics at once (recommended)
+series = cw.get_metric_data(queries, start_time, end_time)
+
+# Process results
+for query_id, data_points in series.items():
+    print(f"{query_id}: {len(data_points)} data points")
+```
+
+#### Asynchronous Mode
+```python
+import asyncio
+from cloud_utils.providers.aws import AsyncCloudWatchMetricsClient, MetricDimension, MetricQuery
+
+async def main():
+    # Initialize async CloudWatch client
+    cw = AsyncCloudWatchMetricsClient(region_name='ap-northeast-2')
     
+    # Define dimensions and queries (same as sync version)
+    dimensions = [MetricDimension("Service", "api-gateway")]
+    queries = [
+        MetricQuery(
+            namespace="AWS/ApiGateway",
+            metric_name="Count",
+            dimensions=dimensions,
+            period=300,
+            stat="Sum"
+        )
+    ]
+    
+    # Set time range
+    end_time = datetime.datetime.now(datetime.timezone.utc)
+    start_time = end_time - datetime.timedelta(hours=6)
+    
+    # Get metrics asynchronously
+    series = await cw.get_metric_data(queries, start_time, end_time)
+    
+    # Process results
+    for query_id, data_points in series.items():
+        print(f"{query_id}: {len(data_points)} data points")
+
+# Run async function
+asyncio.run(main())
+```
     # Multipart upload (for large files)
     await s3_async.upload_multipart('large-file.zip', 'my-async-bucket', 'large-file.zip')
 
