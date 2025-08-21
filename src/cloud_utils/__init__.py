@@ -40,8 +40,10 @@ from .exceptions import (
 try:
     from .providers.aws.s3_client import S3Client
     from .providers.aws.sqs_client import SQSClient, SQSHandler
+    from .providers.aws.secrets_client import SecretsManagerClient
     from .providers.aws.aio.s3_client import AioS3Client
     from .providers.aws.aio.sqs_client import AioSQSClient, AioSQSHandler
+    from .providers.aws.aio.secrets_client import AsyncSecretsManagerClient
     AWS_AVAILABLE = True
 except ImportError:
     AWS_AVAILABLE = False
@@ -74,7 +76,9 @@ if AWS_AVAILABLE:
         "S3Client",
         "SQSClient",
         "SQSHandler",
+        "SecretsManagerClient",
         "AioS3Client",
         "AioSQSClient",
         "AioSQSHandler",
+        "AsyncSecretsManagerClient",
     ])
