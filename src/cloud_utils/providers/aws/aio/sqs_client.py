@@ -618,27 +618,94 @@ class AioSQSHandler:
         if not queue_name and not queue_url:
             raise ValueError("Either queue_name or queue_url must be provided")
         
-        self.queue_name = queue_name
-        self.queue_url = queue_url
         self.sqs_client = AioSQSClient(region_name=region_name, profile_name=profile_name, **kwargs)
-        self._resolved_queue_url = None
+        self._queue_name = None
+        self._queue_url = None
         self._is_fifo = None
+        
+        # Store initial values for async initialization
+        self._initial_queue_name = queue_name
+        self._initial_queue_url = queue_url
     
-    async def _get_queue_url_resolved(self) -> str:
-        """Get resolved queue URL"""
-        if self._resolved_queue_url is None:
-            if self.queue_url:
-                self._resolved_queue_url = self.queue_url
-            else:
-                self._resolved_queue_url = await self.sqs_client.get_queue_url(self.queue_name)
-        return self._resolved_queue_url
+    async def _initialize_queue_info(self) -> None:
+        """Initialize and validate queue information asynchronously"""
+        if self._initial_queue_name and self._initial_queue_url:
+            # Both provided - validate consistency
+            await self._validate_queue_consistency(self._initial_queue_name, self._initial_queue_url)
+            self._queue_name = self._initial_queue_name
+            self._queue_url = self._initial_queue_url
+        elif self._initial_queue_url:
+            # Only queue_url provided - extract queue_name
+            self._queue_url = self._initial_queue_url
+            self._queue_name = self._extract_queue_name_from_url(self._initial_queue_url)
+        else:
+            # Only queue_name provided - get queue_url
+            self._queue_name = self._initial_queue_name
+            self._queue_url = await self.sqs_client.get_queue_url(self._initial_queue_name)
+    
+    def _extract_queue_name_from_url(self, queue_url: str) -> str:
+        """Extract queue name from queue URL"""
+        # SQS URL format: https://sqs.{region}.amazonaws.com/{account_id}/{queue_name}
+        # or for FIFO: https://sqs.{region}.amazonaws.com/{account_id}/{queue_name}.fifo
+        try:
+            # Split by '/' and get the last part
+            parts = queue_url.rstrip('/').split('/')
+            queue_name = parts[-1]
+            
+            # Remove .fifo suffix if present for name extraction
+            if queue_name.endswith('.fifo'):
+                queue_name = queue_name[:-5]  # Remove '.fifo'
+            
+            return queue_name
+        except (IndexError, AttributeError):
+            raise ValueError(f"Invalid queue URL format: {queue_url}")
+    
+    async def _validate_queue_consistency(self, queue_name: str, queue_url: str) -> None:
+        """Validate that queue_name and queue_url are consistent"""
+        extracted_name = self._extract_queue_name_from_url(queue_url)
+        
+        if extracted_name != queue_name:
+            raise ValueError(
+                f"Queue name mismatch: provided '{queue_name}' but URL contains '{extracted_name}'. "
+                f"URL: {queue_url}"
+            )
+        
+        # Additional validation: check if the queue actually exists and matches
+        try:
+            actual_url = await self.sqs_client.get_queue_url(queue_name)
+            if actual_url != queue_url:
+                raise ValueError(
+                    f"Queue URL mismatch: provided '{queue_url}' but AWS returned '{actual_url}' "
+                    f"for queue name '{queue_name}'"
+                )
+        except Exception as e:
+            raise ValueError(f"Failed to validate queue consistency: {e}")
+    
+    @property
+    def queue_name(self) -> str:
+        """Get queue name"""
+        if self._queue_name is None:
+            raise RuntimeError("Queue information not yet initialized. Call an async method first.")
+        return self._queue_name
+    
+    @property
+    def queue_url(self) -> str:
+        """Get queue URL"""
+        if self._queue_url is None:
+            raise RuntimeError("Queue information not yet initialized. Call an async method first.")
+        return self._queue_url
+    
+    async def _ensure_initialized(self) -> None:
+        """Ensure queue information is initialized"""
+        if self._queue_url is None:
+            await self._initialize_queue_info()
     
     async def _is_fifo(self) -> bool:
         """Check if the queue is a FIFO queue"""
         if self._is_fifo is None:
+            await self._ensure_initialized()
             # FIFO queues end with .fifo
-            queue_url = await self._get_queue_url_resolved()
-            self._is_fifo = queue_url.endswith('.fifo')
+            self._is_fifo = self.queue_url.endswith('.fifo')
         return self._is_fifo
     
     def _generate_deduplication_id(self, message_body: str) -> str:
@@ -666,6 +733,8 @@ class AioSQSHandler:
         message_deduplication_id: Optional[str] = None
     ) -> str:
         """Send message to the specific queue"""
+        await self._ensure_initialized()
+        
         # For FIFO queues, ensure required parameters are set
         if await self._is_fifo():
             if message_deduplication_id is None:
@@ -681,9 +750,8 @@ class AioSQSHandler:
             # FIFO queues don't support delay_seconds
             delay_seconds = None
         
-        queue_url = await self._get_queue_url_resolved()
         return await self.sqs_client.send_message(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             message_body=message_body,
             delay_seconds=delay_seconds,
             message_attributes=message_attributes,
@@ -693,6 +761,8 @@ class AioSQSHandler:
     
     async def send_message_batch(self, messages: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """Send batch messages to the specific queue"""
+        await self._ensure_initialized()
+        
         # For FIFO queues, ensure required parameters are set for each message
         if await self._is_fifo():
             processed_messages = []
@@ -716,9 +786,8 @@ class AioSQSHandler:
             
             messages = processed_messages
         
-        queue_url = await self._get_queue_url_resolved()
         return await self.sqs_client.send_message_batch(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             messages=messages
         )
     
@@ -747,6 +816,8 @@ class AioSQSHandler:
             For FIFO queues, if message_deduplication_id is not provided, 
             it will be auto-generated for each message to ensure uniqueness.
         """
+        await self._ensure_initialized()
+        
         # Convert message bodies to proper message format
         messages = []
         for i, message_body in enumerate(message_bodies):
@@ -792,9 +863,8 @@ class AioSQSHandler:
             
             messages = processed_messages
         
-        queue_url = await self._get_queue_url_resolved()
         return await self.sqs_client.send_message_batch(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             messages=messages
         )
     
@@ -807,9 +877,9 @@ class AioSQSHandler:
         attribute_names: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """Receive messages from the specific queue"""
-        queue_url = await self._get_queue_url_resolved()
+        await self._ensure_initialized()
         return await self.sqs_client.receive_messages(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             max_number_of_messages=max_number_of_messages,
             visibility_timeout=visibility_timeout,
             wait_time_seconds=wait_time_seconds,
@@ -819,47 +889,47 @@ class AioSQSHandler:
     
     async def delete_message(self, receipt_handle: str) -> bool:
         """Delete message from the specific queue"""
-        queue_url = await self._get_queue_url_resolved()
+        await self._ensure_initialized()
         return await self.sqs_client.delete_message(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             receipt_handle=receipt_handle
         )
     
     async def delete_message_batch(self, messages: List[Dict[str, str]]) -> Dict[str, List[Dict[str, Any]]]:
         """Delete batch messages from the specific queue"""
-        queue_url = await self._get_queue_url_resolved()
+        await self._ensure_initialized()
         return await self.sqs_client.delete_message_batch(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             messages=messages
         )
     
     async def change_message_visibility(self, receipt_handle: str, visibility_timeout: int) -> bool:
         """Change message visibility timeout for the specific queue"""
-        queue_url = await self._get_queue_url_resolved()
+        await self._ensure_initialized()
         return await self.sqs_client.change_message_visibility(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             receipt_handle=receipt_handle,
             visibility_timeout=visibility_timeout
         )
     
     async def purge_queue(self) -> bool:
         """Purge all messages from the specific queue"""
-        queue_url = await self._get_queue_url_resolved()
-        return await self.sqs_client.purge_queue(queue_url=queue_url)
+        await self._ensure_initialized()
+        return await self.sqs_client.purge_queue(queue_url=self.queue_url)
     
     async def get_queue_attributes(self, attribute_names: Optional[List[str]] = None) -> Dict[str, str]:
         """Get attributes of the specific queue"""
-        queue_url = await self._get_queue_url_resolved()
+        await self._ensure_initialized()
         return await self.sqs_client.get_queue_attributes(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             attribute_names=attribute_names
         )
     
     async def get_queue_info(self) -> Dict[str, Any]:
         """Get comprehensive queue information"""
-        queue_url = await self._get_queue_url_resolved()
+        await self._ensure_initialized()
         attributes = await self.sqs_client.get_queue_attributes(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             attribute_names=[
                 'QueueArn',
                 'ApproximateNumberOfMessages',
@@ -877,7 +947,7 @@ class AioSQSHandler:
         
         return {
             'queue_name': self.queue_name,
-            'queue_url': queue_url,
+            'queue_url': self.queue_url,
             'is_fifo': await self._is_fifo(),
             'attributes': attributes
         }
@@ -892,9 +962,9 @@ class AioSQSHandler:
         max_poll_time: int = 300
     ) -> List[Dict[str, Any]]:
         """Long poll receive messages from the specific queue"""
-        queue_url = await self._get_queue_url_resolved()
+        await self._ensure_initialized()
         return await self.sqs_client.long_poll_receive(
-            queue_url=queue_url,
+            queue_url=self.queue_url,
             max_number_of_messages=max_number_of_messages,
             visibility_timeout=visibility_timeout,
             wait_time_seconds=wait_time_seconds,

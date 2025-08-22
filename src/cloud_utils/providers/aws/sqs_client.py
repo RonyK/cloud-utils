@@ -574,28 +574,84 @@ class SQSHandler:
         if not queue_name and not queue_url:
             raise ValueError("Either queue_name or queue_url must be provided")
         
-        self.queue_name = queue_name
-        self.queue_url = queue_url
         self.sqs_client = SQSClient(region_name=region_name, profile_name=profile_name, **kwargs)
-        self._resolved_queue_url = None
+        self._queue_name = None
+        self._queue_url = None
         self._is_fifo = None
+        
+        # Initialize and validate queue information
+        self._initialize_queue_info(queue_name, queue_url)
+    
+    def _initialize_queue_info(self, queue_name: Optional[str], queue_url: Optional[str]) -> None:
+        """Initialize and validate queue information"""
+        if queue_name and queue_url:
+            # Both provided - validate consistency
+            self._validate_queue_consistency(queue_name, queue_url)
+            self._queue_name = queue_name
+            self._queue_url = queue_url
+        elif queue_url:
+            # Only queue_url provided - extract queue_name
+            self._queue_url = queue_url
+            self._queue_name = self._extract_queue_name_from_url(queue_url)
+        else:
+            # Only queue_name provided - get queue_url
+            self._queue_name = queue_name
+            self._queue_url = self.sqs_client.get_queue_url(queue_name)
+    
+    def _extract_queue_name_from_url(self, queue_url: str) -> str:
+        """Extract queue name from queue URL"""
+        # SQS URL format: https://sqs.{region}.amazonaws.com/{account_id}/{queue_name}
+        # or for FIFO: https://sqs.{region}.amazonaws.com/{account_id}/{queue_name}.fifo
+        try:
+            # Split by '/' and get the last part
+            parts = queue_url.rstrip('/').split('/')
+            queue_name = parts[-1]
+            
+            # Remove .fifo suffix if present for name extraction
+            if queue_name.endswith('.fifo'):
+                queue_name = queue_name[:-5]  # Remove '.fifo'
+            
+            return queue_name
+        except (IndexError, AttributeError):
+            raise ValueError(f"Invalid queue URL format: {queue_url}")
+    
+    def _validate_queue_consistency(self, queue_name: str, queue_url: str) -> None:
+        """Validate that queue_name and queue_url are consistent"""
+        extracted_name = self._extract_queue_name_from_url(queue_url)
+        
+        if extracted_name != queue_name:
+            raise ValueError(
+                f"Queue name mismatch: provided '{queue_name}' but URL contains '{extracted_name}'. "
+                f"URL: {queue_url}"
+            )
+        
+        # Additional validation: check if the queue actually exists and matches
+        try:
+            actual_url = self.sqs_client.get_queue_url(queue_name)
+            if actual_url != queue_url:
+                raise ValueError(
+                    f"Queue URL mismatch: provided '{queue_url}' but AWS returned '{actual_url}' "
+                    f"for queue name '{queue_name}'"
+                )
+        except Exception as e:
+            raise ValueError(f"Failed to validate queue consistency: {e}")
     
     @property
-    def queue_url_resolved(self) -> str:
-        """Get resolved queue URL"""
-        if self._resolved_queue_url is None:
-            if self.queue_url:
-                self._resolved_queue_url = self.queue_url
-            else:
-                self._resolved_queue_url = self.sqs_client.get_queue_url(self.queue_name)
-        return self._resolved_queue_url
+    def queue_name(self) -> str:
+        """Get queue name"""
+        return self._queue_name
+    
+    @property
+    def queue_url(self) -> str:
+        """Get queue URL"""
+        return self._queue_url
     
     @property
     def is_fifo(self) -> bool:
         """Check if the queue is a FIFO queue"""
         if self._is_fifo is None:
             # FIFO queues end with .fifo
-            self._is_fifo = self.queue_url_resolved.endswith('.fifo')
+            self._is_fifo = self.queue_url.endswith('.fifo')
         return self._is_fifo
     
     def _generate_deduplication_id(self, message_body: str) -> str:
@@ -639,7 +695,7 @@ class SQSHandler:
             delay_seconds = None
         
         return self.sqs_client.send_message(
-            queue_url=self.queue_url_resolved,
+            queue_url=self.queue_url,
             message_body=message_body,
             delay_seconds=delay_seconds,
             message_attributes=message_attributes,
@@ -673,7 +729,7 @@ class SQSHandler:
             messages = processed_messages
         
         return self.sqs_client.send_message_batch(
-            queue_url=self.queue_url_resolved,
+            queue_url=self.queue_url,
             messages=messages
         )
     
@@ -748,7 +804,7 @@ class SQSHandler:
             messages = processed_messages
         
         return self.sqs_client.send_message_batch(
-            queue_url=self.queue_url_resolved,
+            queue_url=self.queue_url,
             messages=messages
         )
     
@@ -762,7 +818,7 @@ class SQSHandler:
     ) -> List[Dict[str, Any]]:
         """Receive messages from the specific queue"""
         return self.sqs_client.receive_messages(
-            queue_url=self.queue_url_resolved,
+            queue_url=self.queue_url,
             max_number_of_messages=max_number_of_messages,
             visibility_timeout=visibility_timeout,
             wait_time_seconds=wait_time_seconds,
@@ -773,33 +829,33 @@ class SQSHandler:
     def delete_message(self, receipt_handle: str) -> bool:
         """Delete message from the specific queue"""
         return self.sqs_client.delete_message(
-            queue_url=self.queue_url_resolved,
+            queue_url=self.queue_url,
             receipt_handle=receipt_handle
         )
     
     def delete_message_batch(self, messages: List[Dict[str, str]]) -> Dict[str, List[Dict[str, Any]]]:
         """Delete batch messages from the specific queue"""
         return self.sqs_client.delete_message_batch(
-            queue_url=self.queue_url_resolved,
+            queue_url=self.queue_url,
             messages=messages
         )
     
     def change_message_visibility(self, receipt_handle: str, visibility_timeout: int) -> bool:
         """Change message visibility timeout for the specific queue"""
         return self.sqs_client.change_message_visibility(
-            queue_url=self.queue_url_resolved,
+            queue_url=self.queue_url,
             receipt_handle=receipt_handle,
             visibility_timeout=visibility_timeout
         )
     
     def purge_queue(self) -> bool:
         """Purge all messages from the specific queue"""
-        return self.sqs_client.purge_queue(queue_url=self.queue_url_resolved)
+        return self.sqs_client.purge_queue(queue_url=self.queue_url)
     
     def get_queue_attributes(self, attribute_names: Optional[List[str]] = None) -> Dict[str, str]:
         """Get attributes of the specific queue"""
         return self.sqs_client.get_queue_attributes(
-            queue_url=self.queue_url_resolved,
+            queue_url=self.queue_url,
             attribute_names=attribute_names
         )
     
@@ -821,7 +877,7 @@ class SQSHandler:
         
         return {
             'queue_name': self.queue_name,
-            'queue_url': self.queue_url_resolved,
+            'queue_url': self.queue_url,
             'is_fifo': self.is_fifo,
             'attributes': attributes
         }
