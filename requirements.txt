@@ -1,0 +1,7 @@
+# Dependencies for PyPI deployment
+setuptools>=68
+wheel
+setuptools-scm>=8.0.0
+build
+twine
+
